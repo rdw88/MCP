@@ -11,8 +11,6 @@
 
 #define SECONDS_PER_PROCESS 1
 
-static unsigned int processExited = 0;
-
 
 int childExecute(char *program, char **args, pid_t parent) {
 	sigset_t sigset;
@@ -38,6 +36,75 @@ int childExecute(char *program, char **args, pid_t parent) {
 }
 
 
+void displayProcessInfo(pid_t *pids, int numPids) {
+	for (int i = 0; i < numPids; i++) {
+		if (pids[i] == 0)
+			continue;
+
+		char *tracking[11] = {0};
+
+		FILE *file;
+		char filename[64];
+		snprintf(filename, sizeof(filename), "/proc/%u/status", pids[i]);
+		file = fopen(filename, "r");
+
+		size_t size = 0;
+		char *line = NULL;
+
+		// I want to get the Name (line 1), State (line 2), Pid (line 5), VMsize (line 17), VMData (line 22), VMStk (line 23), Threads (line 29), line 45 & 46 for context switches.
+		char *pidStatus[46];
+		for (int i = 0; getline(&line, &size, file) != -1; i++) {
+			pidStatus[i] = line;
+			line = NULL;
+		}
+
+		free(line);
+
+		tracking[0] = pidStatus[0]; // Name
+		tracking[1] = pidStatus[1]; // State
+		tracking[2] = pidStatus[4]; // Pid
+		tracking[3] = pidStatus[16]; // VMSize
+		tracking[4] = pidStatus[21]; // VMData
+		tracking[5] = pidStatus[22]; // VMStk
+		tracking[6] = pidStatus[28]; // Threads
+		tracking[7] = pidStatus[44]; // Voluntary Context Switches
+		tracking[8] = pidStatus[45]; // Nonvoluntary Context Switches
+
+		fclose(file);
+		
+		memset(filename, 0, 64);
+		snprintf(filename, sizeof(filename), "/proc/%u/io", pids[i]);
+		file = fopen(filename, "r");
+
+		for (int k = 9; k < 11; k++) {
+			getline(&tracking[k], &size, file);
+		}
+
+		fclose(file);
+		
+		size_t nameLen = strlen(tracking[0]) - 7; // Name with "Name:\t" removed and "\n"
+		char name[nameLen];
+
+		// Name:\tprogram1\n\0
+		// program1\0
+		memcpy(name, &tracking[0][6], nameLen);
+		name[nameLen] = '\0';
+		printf("\n============ PROCESS INFO FOR %s =============\n", name);
+		for (int k = 0; k < 11; k++) {
+			printf("%s", tracking[k]);
+		}
+		printf("==============================================\n\n");
+
+		for (int k = 0; k < 46; k++) {
+			free(pidStatus[k]);
+		}
+
+		free(tracking[9]);
+		free(tracking[10]);
+	}
+}
+
+
 void waitSignal(int signal) {
 	sigset_t sigset;
 	sigemptyset(&sigset);
@@ -54,21 +121,26 @@ void onAlarm(int signo) {
 
 
 void initScheduler(pid_t *pids, int numPids) {
-	printf("SENDING SIGUSR1\n");
 	for (int k = 0; k < numPids; k++) {
 		kill(pids[k], SIGUSR1);
 		kill(pids[k], SIGSTOP);
 	}
 
 	unsigned int completedProcesses = 0;
+	unsigned int infoTimer = 0;
 	while (1) {
+		if (infoTimer == 5) {
+			displayProcessInfo(pids, numPids);
+			infoTimer = 0;
+		}
+
 		for (int i = 0; i < numPids; i++) {
 			if (pids[i] == 0)
 				continue;
 
 			signal(SIGALRM, onAlarm);
 			alarm(SECONDS_PER_PROCESS);
-			printf("Process %d running\n", i + 1);
+	//		printf("Process %d running\n", i + 1);
 			kill(pids[i], SIGCONT);
 			waitSignal(SIGUSR2);
 
@@ -76,16 +148,16 @@ void initScheduler(pid_t *pids, int numPids) {
 
 			if (status == 0) {
 				kill(pids[i], SIGSTOP);
-				printf("Process %d paused\n", i + 1);
+	//			printf("Process %d paused\n", i + 1);
 			} else {
 				completedProcesses ++;
 				pids[i] = 0;
-				processExited = 0;
 				printf("Process %d terminated\n", i + 1);
 			}
 		}
 
-		printf("%d completed processes\n", completedProcesses);
+	//	printf("%d completed processes\n", completedProcesses);
+		infoTimer++;
 
 		if (completedProcesses == numPids)
 			break;
@@ -179,7 +251,7 @@ int main(int argc, char *argv[]) {
 	execute(file);
 	fclose(file);
 
-	printf("MCP CLOSING SUCCESSFULLY!!\n");
+	printf("MCP Closing Successfully!\n");
 
 	return 0;
 }
