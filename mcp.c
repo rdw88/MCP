@@ -21,7 +21,7 @@ int childExecute(char *program, char **args, pid_t parent) {
 	int sig = 0;
 
 	kill(parent, SIGCONT);
-	printf("Process %s is now waiting\n", program);
+	//printf("Process %s is now waiting\n", program);
 
 	int status = sigwait(&sigset, &sig);
 	
@@ -164,72 +164,95 @@ void initScheduler(pid_t *pids, int numPids) {
 }
 
 
-void execute(FILE *file) {
-	char *line = NULL;
-	size_t n = 0;
+char **parse(char *line) {
+	size_t n = strlen(line);
+	int numArgs = 1;
+	for (int i = 0; i < n; i++) {
+		if (line[i] == ' ')
+			numArgs ++;
+	}
+
+	char *program;
+	char **args = (char **) malloc((numArgs + 1) * sizeof(char *));
+
+	if (numArgs == 1) {
+		program = line;
+		args[0] = line;
+	} else {
+		char *token = strtok(line, " ");
+		for (int i = 0; i < numArgs; i++) {
+			args[i] = token;
+
+			if (i == 0)
+				program = token;
+
+			token = strtok(NULL, " ");
+		}
+	}
+
+	args[numArgs] = NULL;
+
+	return args;
+}
+
+
+void execute(int file) {
+	char *block = (char *) malloc(1024 * sizeof(char));
+	char **lines;
 	size_t numPids = 1;
-	pid_t *pids = (pid_t *) malloc(sizeof(pid_t));
+	ssize_t bytesRead = 0;
+	pid_t *pids = 0;
 	pid_t parentPid = getpid();
-	int i = 0;
 
-	while (getline(&line, &n, file) != -1) {
-		size_t len = strlen(line);
-		line[len - 1] = '\0';
+	while ((bytesRead = read(file, block, 1023)) > 0) {
+		block[bytesRead] = '\0';
+		char *line = strtok(block, "\n");
+		pids = (pid_t *) malloc(sizeof(pid_t));
+		lines = (char **) malloc(sizeof(char *));
 
-		if (i == numPids) {
+		if (line == NULL) {
+			lines[0] = block;
+		} else {
+			lines[0] = line;
+		}
+		
+		for (int i = 1;; i++) {
+			char *str = strtok(NULL, "\n");
+			if (str == NULL)
+				break;
+
 			numPids++;
 			pids = (pid_t *) realloc(pids, numPids * sizeof(pid_t));
+			lines = (char **) realloc(lines, numPids * sizeof(char *));
+			lines[i] = str;
 		}
 
-		int numArgs = 1;
-		for (int i = 0; i < n; i++) {
-			if (line[i] == ' ')
-				numArgs ++;
-		}
+		for (int i = 0; i < numPids; i++) {
+			char **args = parse(lines[i]);
+			char *program = args[0];
+		
+			pids[i] = fork();
 
-		char *program;
-		char **args = (char **) malloc((numArgs + 1) * sizeof(char *));
-
-		if (numArgs == 1) {
-			program = line;
-			args[0] = line;
-		} else {
-			char *token = strtok(line, " ");
-			for (int i = 0; i < numArgs; i++) {
-				args[i] = token;
-
-				if (i == 0)
-					program = token;
-
-				token = strtok(NULL, " ");
+			if (pids[i] < 0) {
+				fprintf(stderr, "Error starting process %d\n", i);
+			} else if (pids[i] == 0) {
+				childExecute(program, args, parentPid);
+			} else {
+				waitSignal(SIGCONT);
 			}
+
+			free(args);
 		}
-
-		args[numArgs] = NULL;
-
-		pids[i] = fork();
-
-		if (pids[i] < 0) {
-			fprintf(stderr, "Error starting process %d\n", i);
-		} else if (pids[i] == 0) {
-			childExecute(program, args, parentPid);
-		} else {
-			waitSignal(SIGCONT);
-		}
-
-		free(line);
-		line = NULL;
-		free(args);
-		i++;
 	}
-	
-	free(line);
 
 	printf("Waiting 1 second before starting...\n");
 	sleep(1);
 
 	initScheduler(pids, numPids);
+
+	free(block);
 	free(pids);
+	free(lines);
 }
 
 
@@ -239,16 +262,16 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	FILE *file;
-	file = fopen(argv[1], "r");
+	int file;
+	file = open(argv[1], O_RDONLY);
 
-	if (file == NULL) {
+	if (file == -1) {
 		fprintf(stderr, "Error opening file\n");
 		return 1;
 	}
 
 	execute(file);
-	fclose(file);
+	close(file);
 
 	printf("MCP Closing Successfully!\n");
 
