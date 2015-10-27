@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
 
@@ -43,22 +44,23 @@ void displayProcessInfo(pid_t *pids, int numPids) {
 
 		char *tracking[11] = {0};
 
-		FILE *file;
+		int file;
 		char filename[64];
 		snprintf(filename, sizeof(filename), "/proc/%u/status", pids[i]);
-		file = fopen(filename, "r");
-
-		size_t size = 0;
-		char *line = NULL;
-
-		// I want to get the Name (line 1), State (line 2), Pid (line 5), VMsize (line 17), VMData (line 22), VMStk (line 23), Threads (line 29), line 45 & 46 for context switches.
+		file = open(filename, O_RDONLY);
+		
+		ssize_t bytesRead = 0;
+		char *contents = (char *) malloc(2048 * sizeof(char));
 		char *pidStatus[46];
-		for (int i = 0; getline(&line, &size, file) != -1; i++) {
-			pidStatus[i] = line;
-			line = NULL;
-		}
+		bytesRead = read(file, contents, 2048);
+		contents[bytesRead] = '\0';
 
-		free(line);
+		pidStatus[0] = strtok(contents, "\n");
+		char *line;
+
+		for (int k = 1; (line = strtok(NULL, "\n")) != NULL; k++) {
+			pidStatus[k] = line;
+		}
 
 		tracking[0] = pidStatus[0]; // Name
 		tracking[1] = pidStatus[1]; // State
@@ -70,37 +72,34 @@ void displayProcessInfo(pid_t *pids, int numPids) {
 		tracking[7] = pidStatus[44]; // Voluntary Context Switches
 		tracking[8] = pidStatus[45]; // Nonvoluntary Context Switches
 
-		fclose(file);
-		
+		close(file);
+
 		memset(filename, 0, 64);
 		snprintf(filename, sizeof(filename), "/proc/%u/io", pids[i]);
-		file = fopen(filename, "r");
+		file = open(filename, O_RDONLY);
+		char *ioContents = (char *) malloc(256 * sizeof(char));
+		bytesRead = read(file, ioContents, 256);
+		ioContents[bytesRead] = '\0';
 
-		for (int k = 9; k < 11; k++) {
-			getline(&tracking[k], &size, file);
-		}
+		tracking[9] = strtok(ioContents, "\n");
+		tracking[10] = strtok(NULL, "\n");
 
-		fclose(file);
-		
-		size_t nameLen = strlen(tracking[0]) - 7; // Name with "Name:\t" removed and "\n"
+		close(file);
+
+		size_t nameLen = strlen(tracking[0]) - 6; // Name with "Name:\t" removed
 		char name[nameLen];
 
-		// Name:\tprogram1\n\0
-		// program1\0
 		memcpy(name, &tracking[0][6], nameLen);
 		name[nameLen] = '\0';
+
 		printf("\n============ PROCESS INFO FOR %s =============\n", name);
 		for (int k = 0; k < 11; k++) {
-			printf("%s", tracking[k]);
+			printf("%s\n", tracking[k]);
 		}
 		printf("==============================================\n\n");
 
-		for (int k = 0; k < 46; k++) {
-			free(pidStatus[k]);
-		}
-
-		free(tracking[9]);
-		free(tracking[10]);
+		free(contents);
+		free(ioContents);
 	}
 }
 
