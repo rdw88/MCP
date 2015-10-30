@@ -13,30 +13,70 @@
 #define SECONDS_PER_PROCESS 1
 
 
-int childExecute(char *program, char **args, pid_t parent) {
+void alert_error(char *program) {
+	fprintf(stderr, "Failed to exec %s: %s\n", program, strerror(errno));
+}
+
+
+/**
+ * Begins the execution of the forked child process. Waits for the MCP
+ * to give the signal to execute and loads the program with the provided arguments.
+ * 
+ * @param program The program to execute.
+ * @param args    The program's arguments to be executed with.
+ * @param parent  The MCP's Process ID.
+ */
+void childExecute(char *program, char **args, pid_t parent) {
 	sigset_t sigset;
-	sigemptyset(&sigset);
-	sigaddset(&sigset, SIGUSR1);
-	sigprocmask(SIG_BLOCK, &sigset, NULL);
+	int err;
+
+	err = sigemptyset(&sigset);
+
+	if (err == -1) {
+		alert_error(program);
+		return;
+	}
+
+	err = sigaddset(&sigset, SIGUSR1);
+
+	if (err == -1) {
+		alert_error(program);
+		return;
+	}
+
+	err = sigprocmask(SIG_BLOCK, &sigset, NULL);
+
+	if (err == -1) {
+		alert_error(program);
+		return;
+	}
+
 	int sig = 0;
 
-	kill(parent, SIGCONT);
-	//printf("Process %s is now waiting\n", program);
+	err = kill(parent, SIGCONT);
+	if (err == -1) {
+		alert_error(program);
+		return;
+	}
 
 	int status = sigwait(&sigset, &sig);
 	
 	if (status == 0) {
-		status = execvp(program, args);
-		if (status < 0) {
-			fprintf(stderr, "Failed to exec %s: ", program);
-			printf("%s\n", strerror(errno));
+		err = execvp(program, args);
+		if (err == -1) {
+			alert_error(program);
 		}
 	}
-
-	return status;
 }
 
 
+/**
+ * Fetches select information about each process the MCP is running and displays
+ * it to stdout.
+ * 
+ * @param pids    Pointer to an array of process PIDs the MCP has started.
+ * @param numPids The number of PIDs in @pids.
+ */
 void displayProcessInfo(pid_t *pids, int numPids) {
 	for (int i = 0; i < numPids; i++) {
 		if (pids[i] == 0)
@@ -48,11 +88,24 @@ void displayProcessInfo(pid_t *pids, int numPids) {
 		char filename[64];
 		snprintf(filename, sizeof(filename), "/proc/%u/status", pids[i]);
 		file = open(filename, O_RDONLY);
+
+		if (file == -1) {
+			fprintf(stderr, "Error opening file %s: %s\n", filename, strerror(errno));
+			continue;
+		}
 		
 		ssize_t bytesRead = 0;
 		char *contents = (char *) malloc(2048 * sizeof(char));
 		char *pidStatus[46];
 		bytesRead = read(file, contents, 2048);
+
+		if (bytesRead == -1) {
+			fprintf(stderr, "Error reading file %s: %s\n", filename, strerror(errno));
+			free(contents);
+			close(file);
+			continue;
+		}
+
 		contents[bytesRead] = '\0';
 
 		pidStatus[0] = strtok(contents, "\n");
@@ -72,19 +125,45 @@ void displayProcessInfo(pid_t *pids, int numPids) {
 		tracking[7] = pidStatus[44]; // Voluntary Context Switches
 		tracking[8] = pidStatus[45]; // Nonvoluntary Context Switches
 
-		close(file);
+		int err = close(file);
+		if (err == -1) {
+			fprintf(stderr, "Error closing file %s: %s\n", filename, strerror(errno));
+			free(contents);
+			continue;
+		}
 
 		memset(filename, 0, 64);
 		snprintf(filename, sizeof(filename), "/proc/%u/io", pids[i]);
 		file = open(filename, O_RDONLY);
+
+		if (file == -1) {
+			fprintf(stderr, "Error opening file %s: %s\n", filename, strerror(errno));
+			continue;
+		}
+
 		char *ioContents = (char *) malloc(256 * sizeof(char));
 		bytesRead = read(file, ioContents, 256);
+
+		if (bytesRead == -1) {
+			fprintf(stderr, "Error reading file %s: %s\n", filename, strerror(errno));
+			free(contents);
+			free(ioContents);
+			close(file);
+			continue;
+		}
+
 		ioContents[bytesRead] = '\0';
 
 		tracking[9] = strtok(ioContents, "\n");
 		tracking[10] = strtok(NULL, "\n");
 
-		close(file);
+		err = close(file);
+		if (err == -1) {
+			fprintf(stderr, "Error closing file %s: %s\n", filename, strerror(errno));
+			free(contents);
+			free(ioContents);
+			continue;
+		}
 
 		size_t nameLen = strlen(tracking[0]) - 6; // Name with "Name:\t" removed
 		char name[nameLen];
@@ -104,21 +183,65 @@ void displayProcessInfo(pid_t *pids, int numPids) {
 }
 
 
-void waitSignal(int signal) {
+/**
+ * Helper function that makes the calling thread halt execution until a signal
+ * has been received.
+ * 
+ * @param  signal The signal to wait for.
+ * @return        The result of @sigwait (see man sigwait) or -1 if an error occurred.
+ */
+int waitSignal(int signal) {
 	sigset_t sigset;
-	sigemptyset(&sigset);
-	sigaddset(&sigset, signal);
-	sigprocmask(SIG_BLOCK, &sigset, NULL);
+	int err;
+
+	err = sigemptyset(&sigset);
+
+	if (err == -1) {
+		fprintf(stderr, "%s\n", strerror(errno));
+		return -1;
+	}
+
+	err = sigaddset(&sigset, signal);
+
+	if (err == -1) {
+		fprintf(stderr, "%s\n", strerror(errno));
+		return -1;
+	}
+
+	err = sigprocmask(SIG_BLOCK, &sigset, NULL);
+
+	if (err == -1) {
+		fprintf(stderr, "%s\n", strerror(errno));
+		return -1;
+	}
+
 	int sig = 0;
-	sigwait(&sigset, &sig);
+	return sigwait(&sigset, &sig);
 }
 
 
+/**
+ * Interrupt handler for the alarm(2) system call made within the scheduler. 
+ * Signals the scheduler to proceed with the execution of the next child process.
+ * 
+ * @param signo The signal number.
+ */
 void onAlarm(int signo) {
-	kill(getpid(), SIGUSR2);
+	int err = kill(getpid(), SIGUSR2);
+
+	if (err == -1) {
+		fprintf(stderr, "Error signaling SIGUSR2: %s\n", strerror(errno));
+	}
 }
 
 
+/**
+ * Initializes and runs the scheduler until all child processes of the MCP
+ * have finished execution.
+ * 
+ * @param pids    A pointer to an array of child process PIDs.
+ * @param numPids The number of PIDs in @pids.
+ */
 void initScheduler(pid_t *pids, int numPids) {
 	for (int k = 0; k < numPids; k++) {
 		kill(pids[k], SIGUSR1);
@@ -139,7 +262,6 @@ void initScheduler(pid_t *pids, int numPids) {
 
 			signal(SIGALRM, onAlarm);
 			alarm(SECONDS_PER_PROCESS);
-	//		printf("Process %d running\n", i + 1);
 			kill(pids[i], SIGCONT);
 			waitSignal(SIGUSR2);
 
@@ -147,7 +269,6 @@ void initScheduler(pid_t *pids, int numPids) {
 
 			if (status == 0) {
 				kill(pids[i], SIGSTOP);
-	//			printf("Process %d paused\n", i + 1);
 			} else {
 				completedProcesses ++;
 				pids[i] = 0;
@@ -155,7 +276,6 @@ void initScheduler(pid_t *pids, int numPids) {
 			}
 		}
 
-	//	printf("%d completed processes\n", completedProcesses);
 		infoTimer++;
 
 		if (completedProcesses == numPids)
@@ -244,9 +364,6 @@ void execute(int file) {
 			free(args);
 		}
 	}
-
-	printf("Waiting 1 second before starting...\n");
-	sleep(1);
 
 	initScheduler(pids, numPids);
 
