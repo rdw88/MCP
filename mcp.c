@@ -110,12 +110,12 @@ void displayProcessInfo(pid_t *pids, int numPids) {
 		tracking[0] = pidStatus[0]; // Name
 		tracking[1] = pidStatus[1]; // State
 		tracking[2] = pidStatus[4]; // Pid
-		tracking[3] = pidStatus[16]; // VMSize
-		tracking[4] = pidStatus[21]; // VMData
-		tracking[5] = pidStatus[22]; // VMStk
-		tracking[6] = pidStatus[28]; // Threads
-		tracking[7] = pidStatus[44]; // Voluntary Context Switches
-		tracking[8] = pidStatus[45]; // Nonvoluntary Context Switches
+		tracking[3] = pidStatus[12]; // VMSize
+		tracking[4] = pidStatus[17]; // VMData
+		tracking[5] = pidStatus[18]; // VMStk
+		tracking[6] = pidStatus[23]; // Threads
+		tracking[7] = pidStatus[39]; // Voluntary Context Switches
+		tracking[8] = pidStatus[40]; // Nonvoluntary Context Switches
 
 		int err = close(file);
 		if (err == -1) {
