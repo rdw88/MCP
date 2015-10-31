@@ -1,3 +1,13 @@
+/**
+ * 
+ * Project 1 - Ghost of the MCP
+ * By Ryan Wise
+ * CIS 415 Operating Systems (Fall '15)
+ * October 31, 2015
+ * 
+ */
+
+
 #define _GNU_SOURCE
 
 #include <stdio.h>
@@ -10,12 +20,12 @@
 #include <signal.h>
 
 
+/**
+ * The amount of seconds the scheduler allows each process to run for before 
+ * continuing execution of the next.
+ */
 #define SECONDS_PER_PROCESS 1
 
-
-void alert_error(char *program) {
-	fprintf(stderr, "Failed to exec %s: %s\n", program, strerror(errno));
-}
 
 
 /**
@@ -28,34 +38,16 @@ void alert_error(char *program) {
  */
 void childExecute(char *program, char **args, pid_t parent) {
 	sigset_t sigset;
-	int err;
 
-	err = sigemptyset(&sigset);
-
-	if (err == -1) {
-		alert_error(program);
-		return;
-	}
-
-	err = sigaddset(&sigset, SIGUSR1);
-
-	if (err == -1) {
-		alert_error(program);
-		return;
-	}
-
-	err = sigprocmask(SIG_BLOCK, &sigset, NULL);
-
-	if (err == -1) {
-		alert_error(program);
-		return;
-	}
+	sigemptyset(&sigset);
+	sigaddset(&sigset, SIGUSR1);
+	sigprocmask(SIG_BLOCK, &sigset, NULL);
 
 	int sig = 0;
 
-	err = kill(parent, SIGCONT);
+	int err = kill(parent, SIGCONT);
 	if (err == -1) {
-		alert_error(program);
+		fprintf(stderr, "Error signaling MCP: %s\n", strerror(errno));
 		return;
 	}
 
@@ -64,7 +56,7 @@ void childExecute(char *program, char **args, pid_t parent) {
 	if (status == 0) {
 		err = execvp(program, args);
 		if (err == -1) {
-			alert_error(program);
+			fprintf(stderr, "Error executing %s: %s\n", program, strerror(errno));
 		}
 	}
 }
@@ -192,28 +184,10 @@ void displayProcessInfo(pid_t *pids, int numPids) {
  */
 int waitSignal(int signal) {
 	sigset_t sigset;
-	int err;
 
-	err = sigemptyset(&sigset);
-
-	if (err == -1) {
-		fprintf(stderr, "%s\n", strerror(errno));
-		return -1;
-	}
-
-	err = sigaddset(&sigset, signal);
-
-	if (err == -1) {
-		fprintf(stderr, "%s\n", strerror(errno));
-		return -1;
-	}
-
-	err = sigprocmask(SIG_BLOCK, &sigset, NULL);
-
-	if (err == -1) {
-		fprintf(stderr, "%s\n", strerror(errno));
-		return -1;
-	}
+	sigemptyset(&sigset);
+	sigaddset(&sigset, signal);
+	sigprocmask(SIG_BLOCK, &sigset, NULL);
 
 	int sig = 0;
 	return sigwait(&sigset, &sig);
@@ -243,9 +217,21 @@ void onAlarm(int signo) {
  * @param numPids The number of PIDs in @pids.
  */
 void initScheduler(pid_t *pids, int numPids) {
+	int err;
+
 	for (int k = 0; k < numPids; k++) {
-		kill(pids[k], SIGUSR1);
-		kill(pids[k], SIGSTOP);
+		err = kill(pids[k], SIGUSR1);
+
+		if (err == -1) {
+			fprintf(stderr, "Error signaling PID %u: %s\n", pids[k], strerror(errno));
+			continue;
+		}
+
+		err = kill(pids[k], SIGSTOP);
+		
+		if (err == -1) {
+			fprintf(stderr, "Error signaling PID %u: %s\n", pids[k], strerror(errno));
+		}
 	}
 
 	unsigned int completedProcesses = 0;
@@ -260,15 +246,32 @@ void initScheduler(pid_t *pids, int numPids) {
 			if (pids[i] == 0)
 				continue;
 
-			signal(SIGALRM, onAlarm);
+			sighandler_t sig = signal(SIGALRM, onAlarm);
+			if (sig == SIG_ERR) {
+				fprintf(stderr, "Error setting SIGALRM: %s\n", strerror(errno));
+				continue;
+			}
+
 			alarm(SECONDS_PER_PROCESS);
-			kill(pids[i], SIGCONT);
-			waitSignal(SIGUSR2);
+			err = kill(pids[i], SIGCONT);
+			if (err == -1) {
+				fprintf(stderr, "Error signaling PID %u: %s\n", pids[i], strerror(errno));
+				continue;
+			}
+
+			waitSignal(SIGUSR2); // The alarm interrupt handler will signal SIGUSR2 to the MCP.
 
 			int status = waitpid(pids[i], NULL, WNOHANG);
+			
+			if (status == -1) {
+				fprintf(stderr, "Error executing waitpid: %s\n", strerror(errno));
+				continue;
+			} else if (status == 0) {
+				err = kill(pids[i], SIGSTOP);
 
-			if (status == 0) {
-				kill(pids[i], SIGSTOP);
+				if (err == -1) {
+					fprintf(stderr, "Error signaling PID %u: %s\n", pids[i], strerror(errno));
+				}
 			} else {
 				completedProcesses ++;
 				pids[i] = 0;
@@ -284,6 +287,13 @@ void initScheduler(pid_t *pids, int numPids) {
 }
 
 
+/**
+ * Parses a line of input from the input file, getting the program name
+ * and its args into an array that can be passed to execvp(3).
+ * 
+ * @param  line A line from the input file.
+ * @return      Pointer to the array of arguments to be passed to execvp(3).
+ */
 char **parse(char *line) {
 	size_t n = strlen(line);
 	int numArgs = 1;
@@ -316,6 +326,11 @@ char **parse(char *line) {
 }
 
 
+/**
+ * Execute the programs defined in a file.
+ * 
+ * @param file An integer referencing the input file (returned from open(2)).
+ */
 void execute(int file) {
 	char *block = (char *) malloc(1024 * sizeof(char));
 	char **lines;
@@ -354,7 +369,7 @@ void execute(int file) {
 			pids[i] = fork();
 
 			if (pids[i] < 0) {
-				fprintf(stderr, "Error starting process %d\n", i);
+				fprintf(stderr, "Error starting process %d: %s\n", i, strerror(errno));
 			} else if (pids[i] == 0) {
 				childExecute(program, args, parentPid);
 			} else {
