@@ -1,2 +1,5 @@
 ls -l
 echo "Hello World"
+./program1
+./program2
+/usr/bin/firefox
